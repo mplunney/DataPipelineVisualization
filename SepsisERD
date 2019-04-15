@@ -4,11 +4,11 @@ from colour import Color
 
 # instantiate pyexasol connection
 DSN = 'exasol'
-pwFile = '//phcmh07/Users3/171998/My Docs/p.txt'
+pwFile = '//PathToPWFile/p.txt'
 pwf = open(pwFile)
 pw = pwf.read()
 pwf.close()
-cx = pyexasol.connect(dsn=DSN, user='171998', password=pw, schema='DEV_PE', compression=True, quote_ident=True)
+cx = pyexasol.connect(dsn=DSN, user='******', password=pw, schema='DEV_PE', compression=True, quote_ident=True)
 
 # get database object relationships from Exasol
 objectRelations = cx.export_to_pandas(
