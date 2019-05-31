@@ -6,7 +6,7 @@ import pygraphviz as pgv
 
 # instantiate pyexasol connection
 DSN = 'exasol'
-pwFile = '//phchome/Users6/******/My Docs/p.txt'
+pwFile = '//p.txt'
 pwf = open(pwFile)
 pw = pwf.read()
 pwf.close()
