@@ -1,10 +1,12 @@
 import pyexasol
-import pygraphviz as pgv
+# import numpy as np
+import pandas as pd
 from colour import Color
+import pygraphviz as pgv
 
 # instantiate pyexasol connection
 DSN = 'exasol'
-pwFile = '//PathToPWFile/p.txt'
+pwFile = '//phchome/Users6/******/My Docs/p.txt'
 pwf = open(pwFile)
 pw = pwf.read()
 pwf.close()
@@ -13,22 +15,131 @@ cx = pyexasol.connect(dsn=DSN, user='******', password=pw, schema='DEV_PE', comp
 # get database object relationships from Exasol
 objectRelations = cx.export_to_pandas(
     '''
-        SELECT DISTINCT
-            "BuildOrderNBR" AS "stage"
-            ,build."UpstreamObjectNM" AS "upstreamObject"
-            ,build."DownstreamObjectNM" AS "downstreamObject"
-        FROM DEV_PE."SepsisDataSourceBuild_OrderObject" oo
-        INNER JOIN
-            (
-                SELECT DISTINCT
-                    REPLACE(REFERENCED_OBJECT_NAME,'_vw') AS "UpstreamObjectNM"
-                    ,REPLACE(OBJECT_NAME,'_vw')  AS "DownstreamObjectNM"
-                FROM SYS.EXA_DBA_DEPENDENCIES
-                WHERE REFERENCED_OBJECT_NAME LIKE 'Sepsis_%'
-                AND OBJECT_SCHEMA <> 'DEV_NIP'
-            ) AS build
-            ON oo."DatabaseObjectNM" = build."UpstreamObjectNM"
-        ORDER BY "BuildOrderNBR"
+        --CREATE OR REPLACE VIEW DEV_PE."SepsisERD_vw" AS
+
+                WITH rel AS
+                    (
+                        SELECT DISTINCT
+                            REFERENCED_OBJECT_NAME AS "UpstreamObjectNM"
+                            ,CASE WHEN REFERENCED_OBJECT_TYPE = 'VIEW' THEN 'diamond'
+                                WHEN REFERENCED_OBJECT_TYPE = 'TABLE' THEN 'box'
+                                ELSE 'Circle'
+                            END AS "UpstreamObjectTypeNM"
+                            ,OBJECT_NAME AS "DownstreamObjectNM"
+                            ,CASE WHEN OBJECT_TYPE = 'VIEW' THEN 'diamond'
+                                WHEN OBJECT_TYPE = 'TABLE' THEN 'box'
+                                ELSE 'Circle'
+                            END AS "DownstreamObjectTypeNM"
+                        FROM SYS.EXA_DBA_DEPENDENCIES
+                        WHERE OBJECT_NAME LIKE 'Sepsis_%'
+                        AND OBJECT_SCHEMA = 'DASHBOARDS'
+                    )
+                    ,origin AS
+                    (
+                        SELECT 
+                            0 AS "GenerationNBR"
+                            ,REFERENCED_OBJECT_NAME AS "UpstreamObjectNM"
+                            ,CASE WHEN REFERENCED_OBJECT_TYPE = 'VIEW' THEN 'diamond'
+                                WHEN REFERENCED_OBJECT_TYPE = 'TABLE' THEN 'box'
+                                ELSE 'Circle'
+                            END AS "UpstreamObjectTypeNM"
+                            ,OBJECT_NAME AS "DownstreamObjectNM"
+                            ,CASE WHEN OBJECT_TYPE = 'VIEW' THEN 'diamond'
+                                WHEN OBJECT_TYPE = 'TABLE' THEN 'box'
+                                ELSE 'Circle'
+                            END AS "DownstreamObjectTypeNM"
+                        FROM SYS.EXA_DBA_DEPENDENCIES
+                        WHERE OBJECT_NAME = 'Sepsis_Diagnosis_vw'
+                        AND OBJECT_SCHEMA = 'DASHBOARDS'
+                    )
+                    ,anchor AS
+                    (
+                        SELECT
+                            LEVEL AS "GenerationNBR"
+                            ,"UpstreamObjectNM"
+                            ,"UpstreamObjectTypeNM"
+                            ,"DownstreamObjectNM"
+                            ,"DownstreamObjectTypeNM"
+                        FROM rel
+                        WHERE "DownstreamObjectNM" <> 'Sepsis_Diagnosis_vw'
+                        CONNECT BY PRIOR "DownstreamObjectNM" = "UpstreamObjectNM"
+                        START WITH "UpstreamObjectNM" = 'Sepsis_Diagnosis_vw'
+                    )
+                    ,downstream AS
+                    (
+                        SELECT
+                            DENSE_RANK() OVER (ORDER BY LEVEL DESC) AS "GenerationNBR"
+                            ,"UpstreamObjectNM"
+                            ,"UpstreamObjectTypeNM"
+                            ,"DownstreamObjectNM"
+                            ,"DownstreamObjectTypeNM"
+                        FROM rel
+                        WHERE "DownstreamObjectNM" <> 'Sepsis_Diagnosis_vw' 
+                            AND "UpstreamObjectNM" <> 'Sepsis_Diagnosis_vw'
+                            AND "UpstreamObjectNM" LIKE 'Sepsis_%'
+                        CONNECT BY PRIOR "UpstreamObjectNM" = "DownstreamObjectNM"
+                        START WITH "DownstreamObjectNM" = 'Sepsis_Summary_vw'
+                    )	
+                    ,mat AS
+                    (
+                        SELECT DISTINCT
+                            v."DownstreamObjectNM" AS "UpstreamObjectNM"
+                            ,v."DownstreamObjectTypeNM" AS "UpstreamObjectTypeNM"
+                            ,t."UpstreamObjectNM" AS "DownstreamObjectNM"
+                            ,t."UpstreamObjectTypeNM" AS "DownstreamObjectTypeNM"
+                        FROM rel v
+                        INNER JOIN rel t
+                            ON REPLACE(v."DownstreamObjectNM",'_vw','') = t."UpstreamObjectNM"
+                        WHERE v."DownstreamObjectNM" LIKE '%_vw' --AND t."UpstreamObjectNM" LIKE 'Sepsis_%'
+                    )
+                    ,downtrim AS
+                    (
+                        SELECT DISTINCT
+                            MIN("GenerationNBR") AS "GenerationNBR"
+                            ,"UpstreamObjectNM"
+                            ,"UpstreamObjectTypeNM"
+                            ,"DownstreamObjectNM"
+                            ,"DownstreamObjectTypeNM" 
+                        FROM downstream
+                        GROUP BY 2,3,4,5
+                    )
+                    ,stage AS
+                    (					
+                        SELECT * FROM anchor
+                        UNION ALL 
+                        SELECT * FROM origin
+                        UNION ALL 
+                        SELECT * FROM downtrim
+        --			    SELECT 
+        --			 		MIN("GenerationNBR") AS "GenerationNBR"
+        --					,"UpstreamObjectNM"
+        --					,"UpstreamObjectTypeNM"
+        --					,"DownstreamObjectNM"
+        --					,"DownstreamObjectTypeNM" 
+        --				FROM downstream
+        --				GROUP BY 2,3,4,5
+                        UNION ALL 
+                        SELECT 
+                            MIN(v."GenerationNBR") + 0.5 AS "GenerationNBR"
+                            ,t."UpstreamObjectNM"
+                            ,t."UpstreamObjectTypeNM"
+                            ,t."DownstreamObjectNM"
+                            ,t."DownstreamObjectTypeNM" 
+                        FROM mat t
+                        INNER JOIN downtrim v
+                            ON t."DownstreamObjectNM" = v."UpstreamObjectNM"
+                        GROUP BY 2,3,4,5
+                    )
+            SELECT DISTINCT
+                --GROUP_CONCAT(DISTINCT "GenerationNBR") AS "GenerationGroupNM"
+                "GenerationNBR"
+                ,"UpstreamObjectNM"
+                ,"UpstreamObjectTypeNM"
+                ,"DownstreamObjectNM"
+                ,"DownstreamObjectTypeNM" 
+            FROM stage
+            --GROUP BY 2,3,4,5
+            ORDER BY 1
         ;
     '''
 )
@@ -38,32 +149,57 @@ cx.close()
 # print(objectRelations)
 
 #create color palatte for m number of data transfer stages
+generations = objectRelations['GenerationNBR'].unique()
+m = len(generations)
+edgeColors = {}
+n = 0
+colors = list(Color("black").range_to(Color("red"),m))
 
-m = objectRelations['stage'].max()
-stageColors = {}
-n = 1
-
-colors = list(Color("blue").range_to(Color("orange"),m))
-
+ 
 while n < m + 1:
-    for color in colors:
-        stageColors.update({n: color})
+    for generation in generations:
+        edgeColors.update({generation: colors[n]})
         n += 1
         continue
-        
-# print(stageColors)
+    break
+    
+# print(edgeColor)  
+
+#create color palatte for m number of data object types
+objectTypes = pd.concat([objectRelations['UpstreamObjectTypeNM'], objectRelations['DownstreamObjectTypeNM']]).drop_duplicates()
+m = len(objectTypes)
+nodeColors = {}
+n = 0
+colors = list(Color("orange").range_to(Color("blue"),m))
+
+while n < m + 1:
+    for objectType in objectTypes:
+        nodeColors.update({objectType: colors[n]})
+        n += 1
+        continue
+    break
+
+# print(nodeColors)
 
 # instantiate graphviz object, assign graph-level attributes
 graphCode = pgv.AGraph(strict=False, directed=True, fontsize = 32, label = 'SepsisERD', labelloc = 't', rankdir = 'LR')
 
-# create function to add nodes and edges, with arguments for each node and stage
-def graph(upstreamObject, downstreamObject, stage):
-    stageColor = stageColors[stage]
-    graphCode.add_edge(upstreamObject, downstreamObject, label = stage, fontsize = 28, color = stageColor, penwidth = 2, arrowsize = 2)
+# create function to add nodes, with arguments for each object
+def graphNode(UpstreamObject, UpstreamObjectType, DownstreamObject, DownstreamObjectType):
+    nodeColorUpstream = nodeColors[UpstreamObjectType]
+    nodeColorDownstream = nodeColors[DownstreamObjectType]
+    graphCode.add_node(UpstreamObject, shape = UpstreamObjectType, color = nodeColorUpstream, style = 'filled', fontcolor = 'white')
+    graphCode.add_node(DownstreamObject, shape = DownstreamObjectType, color = nodeColorDownstream, style = 'filled', fontcolor = 'white')
 
-# iterate through each relationship and stage, passing dataframe columns as arguments to graph function  
-for i, row in objectRelations.iterrows():
-    graph(row.iloc[1], row.iloc[2], row.iloc[0])
+# create function to add edges, with arguments for each stage
+def graphEdge(UpstreamObject, DownstreamObject, GenerationNBR):
+    edgeColor = edgeColors[GenerationNBR]
+    graphCode.add_edge(UpstreamObject, DownstreamObject, fontsize = 16, label = GenerationNBR, color = edgeColor, penwidth = 2, arrowsize = 2)
+
+# iterate through each object and stage, passing dataframe columns as arguments to graph function  
+for i, row in objectRelations.iterrows():   
+    graphNode(row.iloc[1], row.iloc[2], row.iloc[3], row.iloc[4])
+    graphEdge(row.iloc[1], row.iloc[3], row.iloc[0])
 
 # visualize DOT language text
 graphText = graphCode.string()
